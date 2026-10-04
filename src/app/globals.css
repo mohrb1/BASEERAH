@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7faf8;
+  --surface: #ffffff;
+  --surface-2: #f2f6f3;
+  --border-subtle: #e2eae4;
+  --border-strong: #c9dbd0;
+  --foreground: #17201b;
+  --muted: #68736c;
+  --muted-2: #89948d;
+
+  --emerald: #087443;
+  --emerald-bright: #075c36;
+  --emerald-dim: #eaf5ee;
+
+  --status-supported: #087443;
+  --status-partial: #806b27;
+  --status-context: #66507a;
+  --status-insufficient: #68736c;
+  --status-unverified: #a04b3c;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-2: var(--muted-2);
+
+  --color-emerald: var(--emerald);
+  --color-emerald-bright: var(--emerald-bright);
+  --color-emerald-dim: var(--emerald-dim);
+
+  --color-status-supported: var(--status-supported);
+  --color-status-partial: var(--status-partial);
+  --color-status-context: var(--status-context);
+  --color-status-insufficient: var(--status-insufficient);
+  --color-status-unverified: var(--status-unverified);
+
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-arabic: var(--font-plex-arabic), var(--font-plex-sans), ui-sans-serif, sans-serif;
+}
+
+* {
+  border-color: var(--border-subtle);
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-feature-settings: "ss01" 1;
+}
+
+::selection {
+  background: var(--emerald-dim);
+  color: var(--foreground);
+}
+
+.font-arabic {
+  font-family: var(--font-arabic);
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(8, 116, 67, 0.25);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(8, 116, 67, 0);
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
