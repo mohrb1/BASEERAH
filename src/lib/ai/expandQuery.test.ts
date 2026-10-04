@@ -41,6 +41,21 @@ describe("expandClaimQueries — heuristic mode (no API key)", () => {
     const result = await expandClaimQueries("Zakat and salah are pillars of Islam.");
     expect(result.queries.length).toBeLessThanOrEqual(MAX_EXPANDED_QUERIES);
   });
+
+  it("produces a second, English-bridged query for an Arabic claim (the core regression)", async () => {
+    const result = await expandClaimQueries("أركان الإسلام خمسة");
+    expect(result.queries).toHaveLength(2);
+    expect(result.queries[0]).toBe("أركان الإسلام خمسة");
+    const bridged = result.queries[1].toLowerCase();
+    expect(bridged).toContain("pillars");
+    expect(bridged).toContain("five");
+  });
+
+  it("bridges Arabic claims naming a single pillar", async () => {
+    const result = await expandClaimQueries("الزكاة من أركان الإسلام");
+    expect(result.queries.length).toBeLessThanOrEqual(MAX_EXPANDED_QUERIES);
+    expect(result.queries.some((q) => q.toLowerCase().includes("zakat"))).toBe(true);
+  });
 });
 
 describe("expandClaimQueries — live mode (API key configured)", () => {

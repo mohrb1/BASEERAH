@@ -1,6 +1,8 @@
 import { getAnthropicClient, isLiveModeAvailable, MODEL } from "@/lib/ai/client";
 import { retrieveEvidencePack } from "@/lib/sources/retrieve";
 import { rerankEvidence, type RankedEvidence } from "@/lib/sources/rerank";
+import { evaluateConceptCoverage } from "@/lib/sources/conceptGroups";
+import { tokenize } from "@/lib/sources/textUtils";
 import { logClaimTrace } from "@/lib/observability/trace";
 import type { ClaimResult, EvidenceMatch, VerificationStatus } from "@/types";
 import { VERIFICATION_STATUSES } from "@/types";
@@ -78,7 +80,8 @@ const VERIFY_SCHEMA = {
  */
 function heuristicVerify(
   claimText: string,
-  evidence: EvidenceMatch[]
+  evidence: EvidenceMatch[],
+  searchQueries: string[] = [claimText]
 ): {
   status: VerificationStatus;
   explanation: string;
@@ -103,9 +106,43 @@ function heuristicVerify(
   const top = evidence[0];
   const sourceLabel = top.source.isDemo ? "demo source database" : "live source database";
 
+  // Precision gate: lexical coverage alone can't tell a genuine match from
+  // a polysemous one (e.g. "pillars" meaning literal architectural columns
+  // vs. the doctrinal Five Pillars). If the claim invokes a known anchor
+  // concept and this evidence only shares the bare anchor word — without
+  // the OTHER concepts that would confirm the same intended sense — that
+  // match is never trusted enough to clear SUPPORTED or PARTIALLY_SUPPORTED,
+  // no matter how high the raw coverage score is.
+  //
+  // Deliberately checks `top.source.text` ONLY, never `title`: hadith
+  // collections are filed under book/chapter titles like "Prayer (Kitab
+  // Al-Salat)" that trivially contain a related-concept word regardless of
+  // what the specific narration is actually about — titles are
+  // organizational metadata, not narrative content, and including them
+  // let an unrelated hadith "confirm" via its chapter heading alone.
+  //
+  // Checks the UNION of every SEARCH QUERY actually dispatched (which
+  // always includes the raw claim text as one of them — see
+  // retrieve.ts/expandQuery.ts), not just the raw claim text alone. An
+  // anchor word can be introduced by query expansion itself (e.g. the
+  // phrase bridge "بني على" -> "is built upon" surfaces the word "built",
+  // which never appears in the original Arabic) — the gate needs to see
+  // that anchor to do its job, since it's deciding whether THIS retrieved
+  // evidence actually earned its match, regardless of which formulation
+  // found it.
+  const claimConceptTokens = new Set(searchQueries.flatMap((q) => tokenize(q)));
+  const conceptCoverage = evaluateConceptCoverage(claimConceptTokens, new Set(tokenize(top.source.text)));
+  const anchorOnlyMatch = conceptCoverage.anchorInvoked && !conceptCoverage.confirmed;
+
   if (isComplexClaim(flags)) {
     const reason = complexityReason(flags);
     if (top.matchStrength >= 0.35) {
+      if (anchorOnlyMatch) {
+        return {
+          status: "NEEDS_CONTEXT",
+          explanation: `This claim ${reason} and references "${conceptCoverage.group}", but the closest related record, "${top.source.title}" (${top.source.reference}) in the ${sourceLabel}, only shares that one word without the other concepts that would confirm it is discussing the same thing — it needs careful reading before it can be considered confirmation.`,
+        };
+      }
       return {
         status: "PARTIALLY_SUPPORTED",
         explanation: `This claim ${reason}, which keyword matching alone cannot fully verify. The closest related record, "${top.source.title}" (${top.source.reference}) in the ${sourceLabel}, may support part of this claim but does not confirm it exactly as stated.`,
@@ -125,12 +162,24 @@ function heuristicVerify(
 
   // Simple, unqualified claim — still requires a high coverage bar before SUPPORTED.
   if (top.matchStrength >= 0.6) {
+    if (anchorOnlyMatch) {
+      return {
+        status: "NEEDS_CONTEXT",
+        explanation: `This claim references "${conceptCoverage.group}", but the closest match, "${top.source.title}" (${top.source.reference}) in the ${sourceLabel}, only shares that one word without the other concepts (e.g. prayer, zakat, fasting, pilgrimage) that would confirm it is discussing that same grouping rather than an unrelated use of the word.`,
+      };
+    }
     return {
       status: "SUPPORTED",
       explanation: `This claim closely matches "${top.source.title}" (${top.source.reference}) in the ${sourceLabel}.`,
     };
   }
   if (top.matchStrength >= 0.3) {
+    if (anchorOnlyMatch) {
+      return {
+        status: "NEEDS_CONTEXT",
+        explanation: `This claim references "${conceptCoverage.group}", but the closest match, "${top.source.title}" (${top.source.reference}) in the ${sourceLabel}, only shares that one word without the other concepts that would confirm it is discussing the same grouping.`,
+      };
+    }
     return {
       status: "PARTIALLY_SUPPORTED",
       explanation: `This claim is related to "${top.source.title}" (${top.source.reference}) in the ${sourceLabel}, but the match is partial — the claim may add or omit detail not present in the source.`,
@@ -187,7 +236,7 @@ export async function verifyClaim(
   }
 
   if (!isLiveModeAvailable() || evidence.length === 0) {
-    const result = heuristicVerify(claimText, evidence);
+    const result = heuristicVerify(claimText, evidence, pack.queries);
     trace("heuristic", result.status, evidence);
     return {
       id: `${idPrefix}-${index}`,
@@ -255,7 +304,7 @@ export async function verifyClaim(
       evidence: finalEvidence,
     };
   } catch {
-    const result = heuristicVerify(claimText, evidence);
+    const result = heuristicVerify(claimText, evidence, pack.queries);
     trace("heuristic", result.status, evidence);
     return {
       id: `${idPrefix}-${index}`,

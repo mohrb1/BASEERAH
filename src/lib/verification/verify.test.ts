@@ -285,3 +285,106 @@ describe("verifyClaim — V2 retrieval/reranking adversarial scenarios", () => {
     expect(Object.keys(result.evidence[0]).sort()).toEqual(["matchStrength", "matchedTerms", "source"]);
   });
 });
+
+/**
+ * Concept-group precision gate (src/lib/sources/conceptGroups.ts). Proves
+ * the heuristic verifier never trusts a bare polysemous-anchor match (e.g.
+ * "pillars" meaning literal architectural columns) as SUPPORTED or
+ * PARTIALLY_SUPPORTED evidence for a doctrinal "pillars of Islam" claim,
+ * while still allowing a genuinely confirmed match (multiple pillar
+ * concepts actually present in the evidence) through unaffected.
+ */
+describe("verifyClaim — concept-group precision gate (polysemous 'pillars')", () => {
+  it("CRITICAL SAFETY: evidence containing only the bare anchor word never produces SUPPORTED, even with maximal lexical coverage", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "Architectural notes",
+          reference: "Ref Pillar",
+          text: "The ancient temple had six stone pillars supporting its roof.",
+        },
+        0.9 // would clear the SUPPORTED threshold on raw coverage alone
+      ),
+    ]);
+    const result = await verifyClaim("The five pillars of Islam are well known.", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+    expect(result.status).toBe("NEEDS_CONTEXT");
+  });
+
+  it("does not downgrade a genuinely confirmed pillars-of-Islam match", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "Sahih Muslim — The Book of Faith",
+          reference: "Sahih Muslim 111",
+          text: "Islam is raised on five pillars: the oneness of Allah, establishment of prayer, payment of Zakat, fast of Ramadan, and Pilgrimage.",
+        },
+        0.9
+      ),
+    ]);
+    const result = await verifyClaim("The pillars of Islam are five.", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it("downgrades an anchor-only match that would otherwise be PARTIALLY_SUPPORTED too", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Unrelated", reference: "Ref Y", text: "Of Eram, who had lofty pillars." },
+        0.4 // within the 0.3-0.6 PARTIALLY_SUPPORTED band
+      ),
+    ]);
+    const result = await verifyClaim("The pillars of Islam are a core concept.", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+    expect(result.status).not.toBe("PARTIALLY_SUPPORTED");
+    expect(result.status).toBe("NEEDS_CONTEXT");
+  });
+
+  it("does not engage the concept gate at all when the claim never mentions pillars", async () => {
+    // Same high-coverage evidence shape, but claim has nothing to do with
+    // the concept group — normal (unmodified) threshold behavior applies.
+    mockSearch.mockResolvedValue([makeEvidence({ title: "Intentions hadith", reference: "Ref G" }, 0.8)]);
+    const result = await verifyClaim("The Prophet taught that actions are judged by intentions.", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it("catches a misleading match introduced via query EXPANSION itself, not just the raw claim text", async () => {
+    // Real-world case found during testing: the Arabic claim never says
+    // "pillars" (it's the elliptical "Islam is built upon five [pillars]"
+    // construction), but terminology.ts's phrase bridge ("بني على" -> "is
+    // built upon") introduces the word "built" into the SEARCH QUERY. An
+    // unrelated hadith that happens to mention something "built" plus the
+    // number "five" (e.g. the Isra/Mi'raj narrative's "fifty reduced to
+    // five prayers" and "a palace built of pearls") must still be caught,
+    // even though the anchor word never appears in the original claim text.
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "Isra and Mi'raj narrative",
+          reference: "Ref NightJourney",
+          text: "A palace was built of pearls and emerald on the journey. Prayers were reduced from fifty to only five.",
+        },
+        0.9
+      ),
+    ]);
+    const result = await verifyClaim("الإسلام بني على خمس", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+  });
+
+  it("does not let a hadith's book/chapter TITLE alone satisfy concept confirmation", async () => {
+    // Regression guard for a real bug found during testing: a chapter
+    // titled e.g. "Prayer (Kitab Al-Salat)" must not "confirm" the pillars
+    // concept via its title when the actual narrative body doesn't.
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "Sahih al-Bukhari — Prayers (Salat)",
+          reference: "Sahih al-Bukhari 397",
+          text: "He prayed two rak'at between the two pillars inside the Ka'ba.",
+        },
+        0.9
+      ),
+    ]);
+    const result = await verifyClaim("Prayer is one of the pillars of Islam.", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+  });
+});
