@@ -7,6 +7,7 @@ import { logClaimTrace } from "@/lib/observability/trace";
 import type { ClaimResult, EvidenceMatch, VerificationStatus } from "@/types";
 import { VERIFICATION_STATUSES } from "@/types";
 import { detectClaimComplexity, isComplexClaim } from "./claimComplexity";
+import { classifyInput } from "./classifyInput";
 
 /** Final number of ranked candidates shown to the verifier / returned on
  *  ClaimResult.evidence — unchanged from V1's default so the UI's evidence
@@ -263,8 +264,34 @@ export async function verifyClaim(
   index: number,
   idPrefix: string
 ): Promise<ClaimResult> {
-  const pack = await retrieveEvidencePack(claimText);
-  const ranked = await rerankEvidence(claimText, pack.candidates);
+  // "Claim understanding" step, run before any retrieval is attempted.
+  // Deterministic, offline, no new infrastructure (see classifyInput.ts).
+  // It never changes claimText (always the exact original input below) —
+  // it only decides (a) whether to even attempt retrieval, and (b) which
+  // STRING retrieval searches on for a question-shaped input.
+  const classification = classifyInput(claimText);
+
+  if (classification.kind === "UNCLEAR") {
+    // UNCLEAR only ever fires on empty/whitespace-only input (see
+    // classifyInput.ts) — there's no script to detect a language from, and
+    // this app is Arabic-first, so this one fixed message (the exact
+    // required wording) is always Arabic, unlike every other explanation
+    // in this file which picks its language from the claim's own script.
+    return {
+      id: `${idPrefix}-${index}`,
+      index,
+      claimText,
+      status: "UNVERIFIED",
+      explanation: "لم نتمكن من تحديد ادعاء واضح قابل للتحقق.\nحاول صياغة المعلومة كجملة خبرية.",
+      evidence: [],
+    };
+  }
+
+  const retrievalQuery =
+    classification.kind === "QUESTION" ? (classification.retrievalIntent ?? claimText) : claimText;
+
+  const pack = await retrieveEvidencePack(retrievalQuery);
+  const ranked = await rerankEvidence(retrievalQuery, pack.candidates);
   // Reranking only ever reorders/narrows candidates (relevance, not
   // support). Nothing below this line can make a claim SUPPORTED on the
   // strength of a relevance score alone — only heuristicVerify's thresholds
@@ -289,18 +316,43 @@ export async function verifyClaim(
     });
   }
 
-  if (!isLiveModeAvailable() || evidence.length === 0) {
-    const result = heuristicVerify(claimText, evidence, pack.queries);
-    trace("heuristic", result.status, evidence);
+  // Questions aren't truth-claims — there is nothing to "support" or
+  // "refute". If retrieval happens to find strong evidence for the
+  // underlying topic, present it as context rather than a verified claim,
+  // so BASEERAH never implies a question itself was "proven true". This is
+  // the only place question-handling affects the outcome: the status
+  // ceiling. Every threshold, complexity check, and the concept gate above
+  // ran exactly as they would for any other input.
+  function finalize(
+    status: VerificationStatus,
+    explanation: string,
+    context: string | undefined,
+    finalEvidence: EvidenceMatch[],
+    classificationMode: "live" | "heuristic"
+  ): ClaimResult {
+    let finalStatus = status;
+    let finalExplanation = explanation;
+    if (classification.kind === "QUESTION" && (status === "SUPPORTED" || status === "PARTIALLY_SUPPORTED")) {
+      finalStatus = "NEEDS_CONTEXT";
+      finalExplanation = isArabicText(claimText)
+        ? "تم العثور على دليل ذي صلة بموضوع هذا السؤال، لكن الأسئلة لا يتم التحقق منها كادعاءات — راجع الدليل أدناه."
+        : "Relevant evidence was found for this question's topic, but questions aren't verified as true/false claims — review the evidence below.";
+    }
+    trace(classificationMode, finalStatus, finalEvidence);
     return {
       id: `${idPrefix}-${index}`,
       index,
       claimText,
-      status: result.status,
-      explanation: result.explanation,
-      context: result.context,
-      evidence,
+      status: finalStatus,
+      explanation: finalExplanation,
+      context,
+      evidence: finalEvidence,
     };
+  }
+
+  if (!isLiveModeAvailable() || evidence.length === 0) {
+    const result = heuristicVerify(claimText, evidence, pack.queries);
+    return finalize(result.status, result.explanation, result.context, evidence, "heuristic");
   }
 
   try {
@@ -346,29 +398,10 @@ export async function verifyClaim(
       .map((i) => evidence[i]);
     const finalEvidence = usedEvidence.length > 0 ? usedEvidence : evidence;
 
-    trace("live", parsed.status, finalEvidence);
-
-    return {
-      id: `${idPrefix}-${index}`,
-      index,
-      claimText,
-      status: parsed.status,
-      explanation: parsed.explanation,
-      context: parsed.context,
-      evidence: finalEvidence,
-    };
+    return finalize(parsed.status, parsed.explanation, parsed.context, finalEvidence, "live");
   } catch {
     const result = heuristicVerify(claimText, evidence, pack.queries);
-    trace("heuristic", result.status, evidence);
-    return {
-      id: `${idPrefix}-${index}`,
-      index,
-      claimText,
-      status: result.status,
-      explanation: result.explanation,
-      context: result.context,
-      evidence,
-    };
+    return finalize(result.status, result.explanation, result.context, evidence, "heuristic");
   }
 }
 

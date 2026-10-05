@@ -512,3 +512,127 @@ describe("verifyClaim — the 5 required Arabic claims (real corpus evidence, mo
     expect(result.evidence[0].source.title).toBe("Sahih Muslim — The Book of Faith");
   });
 });
+
+/**
+ * Arabic-first UX update — claim understanding / question-vs-claim / and
+ * the full section-8 regression matrix. All numbering below mirrors the
+ * task brief's own numbered test list.
+ */
+describe("verifyClaim — claim understanding (question vs. claim vs. unclear)", () => {
+  it('3. "الأعمال بالنيات" -> SUPPORTED when trusted evidence genuinely supports it', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "Actions Are Judged by Intentions",
+          reference: "Sahih al-Bukhari 1",
+          text: "The Prophet (peace be upon him) said that actions are judged by intentions, and every person will be rewarded only according to what they intended.",
+          isDemo: true,
+        },
+        0.8
+      ),
+    ]);
+    const result = await verifyClaim("الأعمال بالنيات", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it('2. "الإسلام بني على خمس" performs EXPANDED retrieval rather than failing immediately on literal wording', async () => {
+    mockSearch.mockResolvedValue([]);
+    await verifyClaim("الإسلام بني على خمس", 0, "p");
+    // More than one distinct query was actually dispatched to the adapter —
+    // proof that query expansion ran, rather than giving up on the one
+    // literal (untranslated) formulation.
+    const queriesUsed = new Set(mockSearch.mock.calls.map((call) => call[0]));
+    expect(queriesUsed.size).toBeGreaterThan(1);
+  });
+
+  it('2. "الإسلام بني على خمس" with only a misleading/coincidental match -> NOT SUPPORTED (conservative)', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "Unrelated narrative",
+          reference: "Ref Misleading",
+          text: "A palace was built of pearls. Fifty prayers were eventually reduced to five.",
+        },
+        0.9
+      ),
+    ]);
+    const result = await verifyClaim("الإسلام بني على خمس", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+    expect(["NEEDS_CONTEXT", "INSUFFICIENT_EVIDENCE"]).toContain(result.status);
+  });
+
+  it('2. "الإسلام بني على خمس" CAN become SUPPORTED if genuinely strong evidence is actually found', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("الإسلام بني على خمس", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it('7. "ما هي أركان الإسلام؟" is recognized as a QUESTION, not a claim to verify as true/false', async () => {
+    // Even with maximally strong, genuine evidence, a question is capped at
+    // NEEDS_CONTEXT — it's never "verified" as a truth-claim.
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false },
+        0.9
+      ),
+    ]);
+    const result = await verifyClaim("ما هي أركان الإسلام؟", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+    expect(result.status).not.toBe("PARTIALLY_SUPPORTED");
+    // The question itself is preserved verbatim as the displayed claim.
+    expect(result.claimText).toBe("ما هي أركان الإسلام؟");
+  });
+
+  it("7b. an English question is also recognized and capped the same way", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence({ title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false }, 0.9),
+    ]);
+    const result = await verifyClaim("What are the pillars of Islam?", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+  });
+
+  it("8. random meaningless text never produces SUPPORTED", async () => {
+    mockSearch.mockResolvedValue([]); // gibberish genuinely matches nothing real
+    const result = await verifyClaim("asdkj qwoeiu zzxcv flkjaslkdjf", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+  });
+
+  it("9. a claim with no trusted evidence anywhere remains conservative (never SUPPORTED/PARTIALLY_SUPPORTED)", async () => {
+    mockSearch.mockResolvedValue([]);
+    const result = await verifyClaim("نظرية لا علاقة لها بأي مصدر إسلامي معروف", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+    expect(result.status).not.toBe("PARTIALLY_SUPPORTED");
+  });
+
+  it("10. a negated + absolute + numeric Arabic claim retains every existing safety protection", async () => {
+    // High lexical coverage must still never bypass complexity gating.
+    mockSearch.mockResolvedValue([
+      makeEvidence({ title: "Unrelated but lexically similar", reference: "Ref" }, 0.95),
+    ]);
+    const result = await verifyClaim(
+      "الصلاة ليست واجبة أبدًا على أي مسلم مهما كانت الظروف، وهذا مذكور في 1000 مصدر.",
+      0,
+      "p"
+    );
+    expect(result.status).not.toBe("SUPPORTED");
+  });
+
+  it("empty input is classified UNCLEAR and never reaches retrieval", async () => {
+    const result = await verifyClaim("   ", 0, "p");
+    expect(result.status).toBe("UNVERIFIED");
+    expect(result.evidence).toEqual([]);
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  it("the UNCLEAR explanation uses the exact required Arabic wording", async () => {
+    const result = await verifyClaim("", 0, "p");
+    expect(result.explanation).toBe(
+      "لم نتمكن من تحديد ادعاء واضح قابل للتحقق.\nحاول صياغة المعلومة كجملة خبرية."
+    );
+  });
+});

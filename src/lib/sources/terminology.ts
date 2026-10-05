@@ -103,6 +103,10 @@ const PHRASE_VARIANTS: { arabic: string; english: string }[] = [
   { arabic: "بني على", english: "is built upon" },
   { arabic: "مبني على", english: "is built upon" },
   { arabic: "بنيت على", english: "is built upon" },
+  // "X is one of the pillars of Islam" — a very common general construction
+  // ("الزكاة/الصلاة/الصوم/الحج من أركان الإسلام") naming ONE pillar. Reusable
+  // for any claim using this pattern, not specific to any one pillar.
+  { arabic: "من أركان الإسلام", english: "is one of the pillars of Islam" },
 ];
 
 function buildPhraseRegex(phrase: string): RegExp {

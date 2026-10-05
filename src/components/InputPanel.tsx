@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Sparkles, FileSearch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ImageUploader } from "@/components/ImageUploader";
-import { DEMO_EXAMPLE_TEXT } from "@/lib/demo/exampleInput";
+import { DEMO_EXAMPLES } from "@/lib/demo/exampleInput";
 import { ANALYZE_INPUT_KEY } from "@/lib/session";
 
 type Tab = "text" | "image";
@@ -81,19 +81,27 @@ export function InputPanel() {
                 className="min-h-[104px] w-full resize-none bg-transparent px-1 py-3 text-lg leading-9 text-foreground outline-none placeholder:text-muted-2"
               />
               <div className="flex flex-col gap-3 border-t border-surface-2 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setText(DEMO_EXAMPLE_TEXT);
-                    setInputType("text");
-                    setTab("text");
-                    setError(null);
-                  }}
-                  className="inline-flex items-center gap-1.5 self-start text-xs font-medium text-emerald hover:underline"
-                >
-                  <Sparkles size={13} />
-                  جرّب مثالًا
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald">
+                    <Sparkles size={13} />
+                    جرّب مثالًا
+                  </span>
+                  {DEMO_EXAMPLES.map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      onClick={() => {
+                        setText(example);
+                        setInputType("text");
+                        setTab("text");
+                        setError(null);
+                      }}
+                      className="rounded-full border border-border-subtle bg-surface-2 px-2.5 py-1 text-xs text-muted transition-colors hover:border-emerald/40 hover:text-emerald"
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex items-center gap-3">
                   <span className="font-mono text-[10px] text-muted-2" dir="ltr">
                     {text.length.toLocaleString("en-US")} / {MAX_CHARS.toLocaleString("en-US")}
