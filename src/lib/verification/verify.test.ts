@@ -636,3 +636,83 @@ describe("verifyClaim — claim understanding (question vs. claim vs. unclear)",
     );
   });
 });
+
+/**
+ * Arabic SOURCE EVIDENCE fix — confirms the full verification pipeline
+ * (concept gate, thresholds, SUPPORTED decision) works identically well
+ * when the evidence TEXT itself is genuine Arabic, not just when it's
+ * English. Evidence text is the real Arabic edition text for Sahih Muslim
+ * 111, confirmed via a live fetch against the hadith-api CDN.
+ */
+const ARABIC_MUSLIM_111_TEXT =
+  "بُنِيَ الإِسْلاَمُ عَلَى خَمْسَةٍ عَلَى أَنْ يُوَحَّدَ اللَّهُ وَإِقَامِ الصَّلاَةِ وَإِيتَاءِ الزَّكَاةِ وَصِيَامِ رَمَضَانَ وَالْحَجِّ";
+
+describe("verifyClaim — Arabic source evidence (genuine Arabic text, not translated)", () => {
+  it('1. "أركان الإسلام خمسة" can reach SUPPORTED with genuine Arabic evidence text, and the reference stays "Sahih Muslim 111"', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "صحيح مسلم — كتاب الإيمان",
+          reference: "Sahih Muslim 111",
+          text: ARABIC_MUSLIM_111_TEXT,
+          isDemo: false,
+        },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("أركان الإسلام خمسة", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+    expect(result.evidence[0].source.reference).toBe("Sahih Muslim 111");
+    expect(result.evidence[0].source.text).toBe(ARABIC_MUSLIM_111_TEXT);
+  });
+
+  it("2. the concept gate still correctly CONFIRMS a genuine match when the evidence is Arabic (not just English)", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "صحيح مسلم — كتاب الإيمان", reference: "Sahih Muslim 111", text: ARABIC_MUSLIM_111_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("الزكاة من أركان الإسلام", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it("2b. the concept gate still correctly REJECTS a polysemous-only Arabic match (architectural أركان, not doctrinal)", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "نص غير متعلق بالعقيدة",
+          reference: "Ref",
+          text: "أركان المبنى مصنوعة من الحجر والخرسانة.", // "the building's pillars are made of stone and concrete" — architectural, not doctrinal
+        },
+        0.9
+      ),
+    ]);
+    const result = await verifyClaim("الصلاة من أركان الإسلام", 0, "p");
+    expect(result.status).not.toBe("SUPPORTED");
+  });
+
+  it('3. English claim "The pillars of Islam are five" still works exactly as before (no regression)', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        {
+          title: "Sahih Muslim — The Book of Faith",
+          reference: "Sahih Muslim 111",
+          text: "(The superstructure of) al-Islam is raised on five (pillars), i. e. the oneness of Allah, the establishment of prayer, payment of Zakat, the fast of Ramadan, Pilgrimage (to Mecca).",
+          isDemo: false,
+        },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("The pillars of Islam are five", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it("5. English evidence text is never relabeled as Arabic in the final ClaimResult", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence({ title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111" }, 0.7),
+    ]);
+    const result = await verifyClaim("أركان الإسلام خمسة", 0, "p");
+    expect(/[؀-ۿ]/.test(result.evidence[0].source.text)).toBe(false);
+  });
+});

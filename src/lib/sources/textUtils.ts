@@ -188,6 +188,15 @@ export function topKeywords(queryTerms: string[], n: number): string[] {
     .slice(0, n);
 }
 
+/** True if the text contains any Arabic-script character at all. Used by
+ *  live source adapters to decide whether fetching an Arabic source
+ *  edition is worth attempting for a given query — a plain English query
+ *  would never score higher against Arabic text, so there's no reason to
+ *  pay for the extra fetch. */
+export function containsArabic(text: string): boolean {
+  return /[؀-ۿݐ-ݿ]/.test(text);
+}
+
 /** Trim, drop blanks, and case-insensitively dedupe a list of strings while
  *  preserving first-seen order and original casing. Shared by query
  *  expansion (heuristic + LLM) so the same normalization rule applies

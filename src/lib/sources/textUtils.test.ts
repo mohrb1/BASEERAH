@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dedupeStrings, scoreOverlap, tokenize, topKeywords } from "./textUtils";
+import { containsArabic, dedupeStrings, scoreOverlap, tokenize, topKeywords } from "./textUtils";
 
 describe("tokenize — Unicode-aware behavior", () => {
   it("tokenizes plain English the same as before (stopwords and short tokens dropped)", () => {
@@ -205,5 +205,23 @@ describe("topKeywords / dedupeStrings — unaffected by the tokenizer fix", () =
 
   it("dedupeStrings still case-insensitively dedupes", () => {
     expect(dedupeStrings(["Zakat", "zakat", "Salah"])).toEqual(["Zakat", "Salah"]);
+  });
+});
+
+describe("containsArabic", () => {
+  it("detects Arabic script", () => {
+    expect(containsArabic("أركان الإسلام خمسة")).toBe(true);
+  });
+
+  it("returns false for plain English", () => {
+    expect(containsArabic("The pillars of Islam are five")).toBe(false);
+  });
+
+  it("detects a mixed Arabic/English string", () => {
+    expect(containsArabic("pillars Islam five أركان")).toBe(true);
+  });
+
+  it("returns false for empty input", () => {
+    expect(containsArabic("")).toBe(false);
   });
 });

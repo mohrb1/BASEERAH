@@ -1,6 +1,6 @@
 import type { EvidenceMatch, SourceRecord } from "@/types";
 import { fetchJson, SourceProviderError } from "./errors";
-import { scoreOverlap, tokenize } from "./textUtils";
+import { containsArabic, scoreOverlap, tokenize } from "./textUtils";
 import type { SourceAdapter } from "./types";
 
 /**
@@ -12,13 +12,26 @@ import type { SourceAdapter } from "./types";
  * README.md "Source Providers").
  *
  * There is no search endpoint, so each configured collection's full
- * English edition is fetched once and cached in memory for the process
- * lifetime; search is then a local keyword-overlap scan over real,
- * verified hadith text — never invented.
+ * edition is fetched once and cached in memory for the process lifetime;
+ * search is then a local keyword-overlap scan over real, verified hadith
+ * text — never invented.
  *
  * Canonical URLs point to sunnah.com's well-known public URL scheme
  * (https://sunnah.com/{collection}:{number}), which uses the exact same
  * collection slugs as this provider.
+ *
+ * ARABIC EVIDENCE: each collection also has a verified Arabic edition
+ * (ara-bukhari, ara-muslim, ara-tirmidhi, ara-abudawud — confirmed
+ * reachable, same JSON shape, and using the SAME `hadithnumber` as the
+ * English edition for the same underlying hadith; spot-checked e.g.
+ * English "Sahih Muslim 111" against Arabic edition hadithnumber 111,
+ * which returns the real Arabic text of that exact hadith). For an
+ * Arabic-language query, the Arabic edition is fetched best-effort
+ * alongside the English one, and whichever text scores at least as well
+ * against the query is used as the displayed evidence — never an LLM
+ * translation, always the source edition's own real text. If the Arabic
+ * edition is unavailable for any reason, this silently falls back to the
+ * English edition exactly as before (not a provider failure).
  */
 
 const PROVIDER = "hadith-api (fawazahmed0, public domain CDN)";
@@ -28,7 +41,14 @@ const SUNNAH_BASE = "https://sunnah.com";
 interface CollectionConfig {
   slug: string;
   displayName: string;
+  /** Canonical Arabic name of the collection — well-established public
+   *  knowledge (e.g. "صحيح مسلم"), not a fabricated or machine-translated
+   *  label. Used only in the display title when Arabic evidence text is
+   *  shown; the citation `reference` stays in its canonical English form
+   *  regardless (see toRecord). */
+  displayNameAr: string;
   edition: string;
+  editionAr: string;
   /** Collections universally graded authentic by scholarly consensus, used
    *  only when the source data itself has no explicit grade entries. This
    *  is well-documented public knowledge, not an inference about content. */
@@ -36,10 +56,10 @@ interface CollectionConfig {
 }
 
 const COLLECTIONS: CollectionConfig[] = [
-  { slug: "bukhari", displayName: "Sahih al-Bukhari", edition: "eng-bukhari", impliedGrade: "Sahih (by scholarly consensus)" },
-  { slug: "muslim", displayName: "Sahih Muslim", edition: "eng-muslim", impliedGrade: "Sahih (by scholarly consensus)" },
-  { slug: "tirmidhi", displayName: "Jami at-Tirmidhi", edition: "eng-tirmidhi" },
-  { slug: "abudawud", displayName: "Sunan Abi Dawud", edition: "eng-abudawud" },
+  { slug: "bukhari", displayName: "Sahih al-Bukhari", displayNameAr: "صحيح البخاري", edition: "eng-bukhari", editionAr: "ara-bukhari", impliedGrade: "Sahih (by scholarly consensus)" },
+  { slug: "muslim", displayName: "Sahih Muslim", displayNameAr: "صحيح مسلم", edition: "eng-muslim", editionAr: "ara-muslim", impliedGrade: "Sahih (by scholarly consensus)" },
+  { slug: "tirmidhi", displayName: "Jami at-Tirmidhi", displayNameAr: "جامع الترمذي", edition: "eng-tirmidhi", editionAr: "ara-tirmidhi" },
+  { slug: "abudawud", displayName: "Sunan Abi Dawud", displayNameAr: "سنن أبي داود", edition: "eng-abudawud", editionAr: "ara-abudawud" },
 ];
 
 interface HadithEntry {
@@ -54,20 +74,21 @@ interface HadithEditionFile {
   hadiths: HadithEntry[];
 }
 
-const collectionCache = new Map<string, Promise<HadithEditionFile>>();
+/** Keyed by the full edition string ("eng-bukhari", "ara-bukhari", ...) so
+ *  the English and Arabic editions of the same collection cache
+ *  independently. */
+const editionCache = new Map<string, Promise<HadithEditionFile>>();
 
-function loadCollection(config: CollectionConfig): Promise<HadithEditionFile> {
-  let pending = collectionCache.get(config.slug);
+function loadEdition(edition: string): Promise<HadithEditionFile> {
+  let pending = editionCache.get(edition);
   if (!pending) {
-    pending = fetchJson<HadithEditionFile>(
-      PROVIDER,
-      `${CDN_BASE}/${config.edition}.min.json`,
-      10000
-    ).catch((err) => {
-      collectionCache.delete(config.slug); // allow retry on a later request
-      throw err;
-    });
-    collectionCache.set(config.slug, pending);
+    pending = fetchJson<HadithEditionFile>(PROVIDER, `${CDN_BASE}/${edition}.min.json`, 10000).catch(
+      (err) => {
+        editionCache.delete(edition); // allow retry on a later request
+        throw err;
+      }
+    );
+    editionCache.set(edition, pending);
   }
   return pending;
 }
@@ -86,21 +107,32 @@ function formatGrade(entry: HadithEntry, config: CollectionConfig): string | und
 function toRecord(
   entry: HadithEntry,
   config: CollectionConfig,
-  file: HadithEditionFile
+  file: HadithEditionFile,
+  arabic?: { entry: HadithEntry; displayAsArabic: boolean }
 ): SourceRecord {
   const chapter = file.metadata.sections?.[String(entry.reference.book)];
+  const displayAsArabic = arabic?.displayAsArabic ?? false;
+  const titlePrefix = displayAsArabic ? config.displayNameAr : config.displayName;
   return {
     id: `live-hadith-${config.slug}-${entry.hadithnumber}`,
     type: "hadith",
+    // Citation stays in its canonical English form regardless of which
+    // language the evidence TEXT is shown in — this is the stable,
+    // accurate reference identity ("Sahih Muslim 111"), not a translation.
     reference: `${config.displayName} ${entry.hadithnumber}`,
     collection: config.displayName,
     grade: formatGrade(entry, config),
-    title: chapter ? `${config.displayName} — ${chapter}` : config.displayName,
-    text: entry.text,
+    title: chapter ? `${titlePrefix} — ${chapter}` : titlePrefix,
+    text: displayAsArabic ? arabic!.entry.text : entry.text,
+    // Populated whenever the Arabic edition had this hadith, regardless of
+    // which text is primary — real source text, never a translation.
+    arabicText: arabic?.entry.text,
     tags: [],
     isDemo: false,
     sourceUrl: `${SUNNAH_BASE}/${config.slug}:${entry.hadithnumber}`,
-    provider: `${PROVIDER} — translation: English`,
+    provider: displayAsArabic
+      ? `${PROVIDER} — Arabic edition (${config.editionAr})`
+      : `${PROVIDER} — translation: English`,
   };
 }
 
@@ -112,6 +144,12 @@ export class LiveHadithAdapter implements SourceAdapter {
     const queryTerms = new Set(tokenize(query));
     if (queryTerms.size === 0) return [];
 
+    // Only worth fetching the Arabic edition when the query itself has
+    // Arabic content — a purely English/bridged query never scores higher
+    // against Arabic text, so this keeps English-only retrieval exactly as
+    // fast as before (no extra fetch at all).
+    const wantArabic = containsArabic(query);
+
     const errors: unknown[] = [];
     const candidates: EvidenceMatch[] = [];
 
@@ -119,19 +157,49 @@ export class LiveHadithAdapter implements SourceAdapter {
       COLLECTIONS.map(async (config) => {
         let file: HadithEditionFile;
         try {
-          file = await loadCollection(config);
+          file = await loadEdition(config.edition);
         } catch (err) {
           errors.push(err);
           return;
         }
 
+        // Best-effort only: an Arabic-edition failure is NOT a provider
+        // failure and must never block English results — safe fallback,
+        // exactly as the existing CompositeLiveSourceAdapter/demo fallback
+        // pattern already does one layer up.
+        let arabicFile: HadithEditionFile | null = null;
+        if (wantArabic) {
+          try {
+            arabicFile = await loadEdition(config.editionAr);
+          } catch {
+            arabicFile = null;
+          }
+        }
+        const arabicByNumber = arabicFile
+          ? new Map(arabicFile.hadiths.map((h) => [h.hadithnumber, h]))
+          : null;
+
         for (const entry of file.hadiths) {
-          const { score, matchedTerms } = scoreOverlap(queryTerms, entry.text);
-          if (matchedTerms.length >= 2 || score >= 0.5) {
+          const enResult = scoreOverlap(queryTerms, entry.text);
+          const arEntry = arabicByNumber?.get(entry.hadithnumber);
+          const arResult = arEntry ? scoreOverlap(queryTerms, arEntry.text) : null;
+
+          // Prefer Arabic whenever it's at least as strong a genuine match
+          // as the English text — never because it's Arabic alone, only
+          // because the query's own evidence says so.
+          const useArabic = !!(arResult && arResult.score > 0 && arResult.score >= enResult.score);
+          const chosen = useArabic ? arResult! : enResult;
+
+          if (chosen.matchedTerms.length >= 2 || chosen.score >= 0.5) {
             candidates.push({
-              source: toRecord(entry, config, file),
-              matchStrength: score,
-              matchedTerms,
+              source: toRecord(
+                entry,
+                config,
+                file,
+                arEntry ? { entry: arEntry, displayAsArabic: useArabic } : undefined
+              ),
+              matchStrength: chosen.score,
+              matchedTerms: chosen.matchedTerms,
             });
           }
         }
@@ -156,7 +224,7 @@ export class LiveHadithAdapter implements SourceAdapter {
     if (!config) return null;
 
     try {
-      const file = await loadCollection(config);
+      const file = await loadEdition(config.edition);
       const entry = file.hadiths.find((h) => h.hadithnumber === Number(numberStr));
       return entry ? toRecord(entry, config, file) : null;
     } catch {
