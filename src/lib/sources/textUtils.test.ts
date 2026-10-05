@@ -26,28 +26,31 @@ describe("tokenize — Unicode-aware behavior", () => {
   });
 
   it("tokenizes plain (undiacritized) Arabic into whole, unfragmented words", () => {
-    expect(tokenize("أركان الإسلام خمسة")).toEqual(["اركان", "الاسلام", "خمسة"]);
+    // Note: "خمسة" normalizes to "خمسه" (ta marbuta -> ha) — see the
+    // dedicated Arabic-orthography-normalization describe block below.
+    expect(tokenize("أركان الإسلام خمسة")).toEqual(["اركان", "الاسلام", "خمسه"]);
   });
 
   it("strips Arabic diacritics (tashkeel) WITHOUT fragmenting the word", () => {
     // "الصَّلَاة" (prayer, fully diacritized) must collapse to one clean token,
     // not shatter into multiple pieces around each removed diacritic.
-    expect(tokenize("الصَّلَاة")).toEqual(["الصلاة"]);
+    expect(tokenize("الصَّلَاة")).toEqual(["الصلاه"]);
   });
 
   it("strips Arabic punctuation (Arabic comma و question mark)", () => {
     expect(tokenize("أهلاً، بالعالم؟")).toEqual(["اهلا", "بالعالم"]);
   });
 
-  it("preserves Arabic-Indic numerals as tokens", () => {
+  it("normalizes Arabic-Indic numerals to Western digits (searchable either way)", () => {
     const tokens = tokenize("خمس مرات يوميا ١٢٣");
-    expect(tokens).toContain("١٢٣");
+    expect(tokens).toContain("123");
+    expect(tokens).not.toContain("١٢٣");
   });
 
   it("handles mixed Arabic/English text, tokenizing both scripts", () => {
     const tokens = tokenize("Zakat الزكاة is obligatory");
     expect(tokens).toContain("zakat");
-    expect(tokens).toContain("الزكاة");
+    expect(tokens).toContain("الزكاه"); // ta marbuta normalized to ha
     expect(tokens).toContain("obligatory");
   });
 
@@ -133,6 +136,48 @@ describe("tokenize — morphological normalization (retrieval layer only)", () =
     // shape or side channel.
     const result = scoreOverlap(new Set(tokenize("fast")), "fasting is rewarded");
     expect(Object.keys(result).sort()).toEqual(["matchedTerms", "score"]);
+  });
+});
+
+describe("tokenize — Arabic orthography normalization (retrieval layer only)", () => {
+  it("folds alef variants (أ/إ/آ) to bare alef (ا)", () => {
+    expect(tokenize("أكرم")).toEqual(tokenize("اكرم"));
+    expect(tokenize("إسلام")).toEqual(tokenize("اسلام"));
+    expect(tokenize("آمن")).toEqual(tokenize("امن"));
+  });
+
+  it("folds ta marbuta (ة) to ha (ه) for matching purposes", () => {
+    expect(tokenize("الصلاة")).toEqual(tokenize("الصلاه"));
+    expect(tokenize("الزكاة")).toEqual(tokenize("الزكاه"));
+  });
+
+  it("folds alef maksura (ى) to ya (ي) for matching purposes", () => {
+    expect(tokenize("مصطفى")).toEqual(tokenize("مصطفي"));
+  });
+
+  it("strips tatweel (ـ) without fragmenting the word", () => {
+    expect(tokenize("اللـــه")).toEqual(tokenize("الله"));
+  });
+
+  it("normalizes Arabic-Indic digits to Western digits", () => {
+    expect(tokenize("سنة ٢٠٢٤")).toEqual(tokenize("سنة 2024"));
+  });
+
+  it("lets two independently-worded Arabic strings using different spelling conventions match", () => {
+    // Same word, two common real-world spellings (ة vs ه, أ vs ا).
+    const { score, matchedTerms } = scoreOverlap(
+      new Set(tokenize("الصلاة من أركان الاسلام")),
+      "الصلاه من اركان الإسلام"
+    );
+    expect(score).toBeGreaterThan(0.5);
+    expect(matchedTerms.length).toBeGreaterThan(0);
+  });
+
+  it("never alters the raw claim text itself — normalization is tokenize()-internal only", () => {
+    // tokenize() returns a NEW token list; it must not mutate its input string.
+    const original = "الصلاة من أركان الإسلام";
+    tokenize(original);
+    expect(original).toBe("الصلاة من أركان الإسلام");
   });
 });
 

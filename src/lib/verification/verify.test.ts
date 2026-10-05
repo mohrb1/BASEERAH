@@ -388,3 +388,127 @@ describe("verifyClaim — concept-group precision gate (polysemous 'pillars')", 
     expect(result.status).not.toBe("SUPPORTED");
   });
 });
+
+/**
+ * The bridged/expanded SEARCH query (e.g. an Arabic claim's English
+ * reformulation) must never leak into or replace what's shown to the
+ * user — ClaimResult.claimText always stays the exact original input.
+ */
+describe("verifyClaim — original claim text is never replaced by a bridged search query", () => {
+  it("keeps the exact original Arabic claim text on the result, even though retrieval internally searched an English-bridged query", async () => {
+    mockSearch.mockResolvedValue([makeEvidence({ title: "Some hadith", reference: "Ref" }, 0.6)]);
+    const claim = "أركان الإسلام خمسة";
+    const result = await verifyClaim(claim, 0, "p");
+    expect(result.claimText).toBe(claim);
+  });
+
+  it("keeps the exact original text for the phrase-bridged claim too", async () => {
+    mockSearch.mockResolvedValue([]);
+    const claim = "الإسلام بني على خمس";
+    const result = await verifyClaim(claim, 0, "p");
+    expect(result.claimText).toBe(claim);
+  });
+});
+
+/**
+ * The 5 required Arabic claims (BASEERAH Arabic-first UX task). Evidence
+ * text below is reproduced verbatim from the real live hadith-api corpus
+ * (confirmed via a live pipeline run), so these tests are a deterministic,
+ * offline regression guard for exactly the real-world behavior — not
+ * invented data. Four genuinely match the real "five pillars" hadith
+ * (Sahih Muslim 111); the fifth is the real polysemous "pillars" hadith
+ * (Sahih al-Bukhari 397, about literal architectural pillars inside the
+ * Ka'ba) that the concept gate must keep at NEEDS_CONTEXT.
+ */
+const SAHIH_MUSLIM_111_TEXT =
+  "It is narrated on the authority of ('Abdullah) son of Umar (may Allah be pleased with them) that the Prophet (may peace of Allah be upon him) said:(The superstructure of) al-Islam is raised on five (pillars), i. e. the oneness of Allah, the establishment of prayer, payment of Zakat, the, fast of Ramadan, Pilgrimage (to Mecca).";
+
+const BUKHARI_397_TEXT =
+  "Narrated Mujahid: Someone came to Ibn `Umar and said, \"Here is Allah's Messenger (ﷺ) entering the Ka`ba.\" Ibn `Umar said, \"I went there but the Prophet (ﷺ) had come out of the Ka`ba and I found Bilal standing between its two doors. I asked Bilal, 'Did the Prophet (ﷺ) pray in the Ka`ba?' Bilal replied, 'Yes, he prayed two rak`at between the two pillars which are to your left on entering the Ka`ba.";
+
+describe("verifyClaim — the 5 required Arabic claims (real corpus evidence, mocked adapter)", () => {
+  it('1. "أركان الإسلام خمسة" -> SUPPORTED', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("أركان الإسلام خمسة", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it('2. "الزكاة من أركان الإسلام" -> SUPPORTED', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("الزكاة من أركان الإسلام", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it('3. "الصوم من أركان الإسلام" -> SUPPORTED', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("الصوم من أركان الإسلام", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it('4. "الحج من أركان الإسلام" -> SUPPORTED', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("الحج من أركان الإسلام", 0, "p");
+    expect(result.status).toBe("SUPPORTED");
+  });
+
+  it('5. "الصلاة من أركان الإسلام" -> NEEDS_CONTEXT (concept gate correctly rejects the polysemous match)', async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih al-Bukhari — Prayers (Salat)", reference: "Sahih al-Bukhari 397", text: BUKHARI_397_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("الصلاة من أركان الإسلام", 0, "p");
+    expect(result.status).toBe("NEEDS_CONTEXT");
+  });
+
+  it("produces an Arabic-language explanation for an Arabic claim", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("أركان الإسلام خمسة", 0, "p");
+    expect(/[؀-ۿ]/.test(result.explanation)).toBe(true);
+  });
+
+  it("produces an English-language explanation for an English claim (no regression)", async () => {
+    mockSearch.mockResolvedValue([makeEvidence({ title: "Intentions hadith", reference: "Ref G" }, 0.8)]);
+    const result = await verifyClaim("The Prophet taught that actions are judged by intentions.", 0, "p");
+    expect(/[؀-ۿ]/.test(result.explanation)).toBe(false);
+  });
+
+  it("never fabricates an Arabic translation of the English source title/reference", async () => {
+    mockSearch.mockResolvedValue([
+      makeEvidence(
+        { title: "Sahih Muslim — The Book of Faith", reference: "Sahih Muslim 111", text: SAHIH_MUSLIM_111_TEXT, isDemo: false },
+        0.7
+      ),
+    ]);
+    const result = await verifyClaim("أركان الإسلام خمسة", 0, "p");
+    // The source title must appear verbatim (untranslated) inside the Arabic explanation.
+    expect(result.explanation).toContain("Sahih Muslim — The Book of Faith");
+    expect(result.evidence[0].source.title).toBe("Sahih Muslim — The Book of Faith");
+  });
+});

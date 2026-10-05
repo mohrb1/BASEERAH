@@ -23,6 +23,9 @@ import { tokenize } from "./textUtils";
  */
 export interface ConceptGroup {
   name: string;
+  /** Arabic display name, used only when rendering an Arabic-language
+   *  explanation (see verify.ts) — never used for matching. */
+  nameAr: string;
   /** The polysemous anchor term(s) — NOT sufficient evidence by themselves. */
   anchors: string[];
   /** Other concept terms whose presence in the evidence confirms the intended sense. */
@@ -34,6 +37,7 @@ export interface ConceptGroup {
 const RAW_CONCEPT_GROUPS: ConceptGroup[] = [
   {
     name: "pillars of Islam",
+    nameAr: "أركان الإسلام",
     // "built" is included alongside the literal "pillars"/"أركان" words
     // because the query-expansion phrase bridge "بني على" -> "is built
     // upon" (see terminology.ts PHRASE_VARIANTS) surfaces "built" as the
@@ -57,6 +61,7 @@ const RAW_CONCEPT_GROUPS: ConceptGroup[] = [
 
 interface CompiledConceptGroup {
   name: string;
+  nameAr: string;
   anchors: Set<string>;
   relatedConcepts: Set<string>;
   minRelatedMatches: number;
@@ -72,6 +77,7 @@ function canonicalTokens(terms: string[]): Set<string> {
 
 const CONCEPT_GROUPS: CompiledConceptGroup[] = RAW_CONCEPT_GROUPS.map((g) => ({
   name: g.name,
+  nameAr: g.nameAr,
   anchors: canonicalTokens(g.anchors),
   relatedConcepts: canonicalTokens(g.relatedConcepts),
   minRelatedMatches: g.minRelatedMatches,
@@ -83,6 +89,7 @@ export interface ConceptCoverageResult {
   /** True if the evidence demonstrates enough of the group's other concepts to trust the anchor match. False whenever anchorInvoked is false too (nothing to confirm). */
   confirmed: boolean;
   group?: string;
+  groupAr?: string;
   relatedMatches?: number;
 }
 
@@ -107,6 +114,7 @@ export function evaluateConceptCoverage(
       anchorInvoked: true,
       confirmed: relatedMatches >= group.minRelatedMatches,
       group: group.name,
+      groupAr: group.nameAr,
       relatedMatches,
     };
   }

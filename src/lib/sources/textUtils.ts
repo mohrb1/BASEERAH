@@ -82,6 +82,40 @@ function normalizeMorphology(token: string): string {
 }
 
 /**
+ * Standard Arabic search-normalization — the same scheme used by e.g.
+ * Lucene's ArabicNormalizer, not something invented here: fold alef
+ * variants (أ/إ/آ/ٱ) to bare ا, ta marbuta (ة) to ha (ه), alef maksura (ى)
+ * to ya (ي), and strip tatweel (ـ, a purely decorative elongation
+ * character with no phonetic value — Unicode classifies it as a letter,
+ * so the \p{L} filter below would otherwise keep it sitting inside a
+ * word). This treats common real-world spelling variants of the SAME
+ * word (e.g. a ta-marbuta/ha slip) as equal for MATCHING purposes only.
+ *
+ * Runs only inside tokenize(), so it only ever affects retrieval/ranking
+ * token sets — the original claim text shown in the UI, passed to
+ * heuristicVerify/claimComplexity, or stored on ClaimResult is never
+ * touched by this.
+ */
+function normalizeArabicOrthography(input: string): string {
+  return input
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .replace(/ـ/g, ""); // tatweel — delete, not space, so it doesn't fragment the word
+}
+
+/** Arabic-Indic digits (٠-٩) -> Western digits, so a number written either
+ *  way is searchable the same. */
+const ARABIC_INDIC_DIGITS: Record<string, string> = {
+  "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
+  "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
+};
+
+function normalizeDigits(input: string): string {
+  return input.replace(/[٠-٩]/g, (d) => ARABIC_INDIC_DIGITS[d]);
+}
+
+/**
  * Lowercase, strip diacritics/punctuation, split on whitespace, drop
  * stopwords and short tokens.
  *
@@ -104,7 +138,7 @@ function normalizeMorphology(token: string): string {
  *     punctuation (Latin and Arabic alike, e.g. "،" "؟").
  */
 export function tokenize(input: string): string[] {
-  const tokens = input
+  const tokens = normalizeDigits(normalizeArabicOrthography(input))
     .toLowerCase()
     .normalize("NFKD")
     .replace(/\p{M}/gu, "")
